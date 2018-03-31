@@ -1,0 +1,19 @@
+5 Message(3, 11) Visit Grandma on way back home
+5 Message(3, 11) Visit Grandma on way back ho
+5 Message(4, 11) Visit Grandma on way back home
+5 Message(4, 1) there grandma
+Create_Thread: MessageType(2)
+Create_Thread: MessageType(3)
+
+////////////////
+5 Message(4, 11) Visit Grandma on way back home
+5 Message(4, 1) there grandma
+Create_Thread: MessageType(4)
+50 Message(3, 11) Visit Grandma on way back ho
+Create_Thread: MessageType(3)
+Cancel: Message(11)
+
+/////////////////
+50 Message(3, 11) Visit Grandma on way back ho
+Create_Thread: MessageType(3)
+50 Message(4, 11) Visit Grandma on way back ho
