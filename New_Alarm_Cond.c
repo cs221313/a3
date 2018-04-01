@@ -25,12 +25,12 @@
 alarm_t;
 
 //structure of thread
-typedef struct alarm_thread_tag {
-   struct alarm_thread_tag * link;
+typedef struct display_thread_tag {
+   struct display_thread_tag * link;
    pthread_t thread_id;
    int message_type;
 }
-alarm_thread_t;
+display_thread_t;
 
 pthread_mutex_t alarm_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -39,13 +39,13 @@ pthread_cond_t alarmA_req = PTHREAD_COND_INITIALIZER;
 //alarm list
 alarm_t * alarm_list = NULL;
 //thread list
-alarm_thread_t * thread_list = NULL;
+display_thread_t * thread_list = NULL;
 int alarm_thread_created = 0;
 
 //Insert Thread in global thread list
-void thread_insert(alarm_thread_t * thread) {
+void thread_insert(display_thread_t * thread) {
    int status;
-   alarm_thread_t * * last, * next;
+   display_thread_t * * last, * next;
 
    last = & thread_list;
    next = * last;
@@ -128,13 +128,18 @@ void alarm_replace(int message_number, int alarm_second, int message_type, char 
 
 }
 
-//if alarmlist contains alarm with message type and req type return 1
+/**
+ * check alarmlist contains alarm with message type and request type 
+ * \param message_type message type,
+ * \param alarm_request_type request type,
+ * \return if 1
+ */
 int alarm_list_containsmt(int message_type, char alarm_request_type) {
    alarm_t * next;
-   int status;
 
    for (next = alarm_list; next != NULL; next = next->link) {
-      if (next->message_type == message_type && next->alarm_request_type == alarm_request_type) {
+      if (next->message_type == message_type && 
+          next->alarm_request_type == alarm_request_type) {
          return 1;
       }
    }
@@ -144,7 +149,7 @@ int alarm_list_containsmt(int message_type, char alarm_request_type) {
 
 //Checks to see if thread list contains thread with same message type
 int thread_list_containsmt(int message_type) {
-   alarm_thread_t * next;
+   display_thread_t * next;
    int status;
 
    for (next = thread_list; next != NULL; next = next->link) {
@@ -159,11 +164,11 @@ int thread_list_containsmt(int message_type) {
 //insert alarm into global list
 void alarm_insert(alarm_t * alarm) {
    int status;
-   alarm_t * * last, * next;
+   alarm_t **last, *next;
    /*
     *Call for mutex so the conditon variable in thread to synched with this function
     */
-   status = pthread_mutex_lock( & alarm_mutex);
+   status = pthread_mutex_lock( &alarm_mutex);
    if (status != 0)
       err_abort(status, "Lock mutex");
    /*
@@ -221,7 +226,7 @@ void alarm_remover(alarm_t * alarm) {
          }
          temp_alarm->link = NULL;
          free(temp_alarm);
-
+         break;
       }
    }
 #ifdef DEBUG
@@ -240,7 +245,7 @@ void alarm_remover(alarm_t * alarm) {
 
 //deletes threads that are no longer needed
 void obsolescent_thread(int terminated_message_type) {
-   alarm_thread_t * temp_thread, * temp_thread_past;
+   display_thread_t * temp_thread, * temp_thread_past;
    /*
     *Remove thread of MessageType(x) from list, and cancel thread
     */
@@ -423,20 +428,19 @@ void * alarm_thread(void * arg) {
    alarm_t * alarm;
    time_t now;
    pthread_t thread;
-   alarm_thread_t * thread_node;
+   display_thread_t * thread_node;
    thread_node = NULL;
 
-   status = pthread_mutex_lock( & alarm_mutex);
+   status = pthread_mutex_lock( &alarm_mutex);
    if (status != 0)
       err_abort(status, "Lock mutex");
 
    while (1) {
-
-      status = pthread_cond_wait( & alarm_cond, & alarm_mutex);
+      status = pthread_cond_wait( &alarm_cond, &alarm_mutex);
       if (status != 0)
          err_abort(status, "Wait on cond");
 
-      status = pthread_mutex_lock( & print_mutex);
+      status = pthread_mutex_lock( &print_mutex);
       if (status != 0)
          err_abort(status, "Lock print mutex");
 
@@ -452,7 +456,7 @@ void * alarm_thread(void * arg) {
          if (status != 0)
             err_abort(status, "Broadcast cond");
          next->seen_by_alarm_thread = 1;
-         alarm_thread_t * next_thread;
+         display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
             if (!alarm_list_containsmt(next_thread->message_type, 'A')) {
                printf("Type A Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), next_thread->message_type, next_thread->message_type);
@@ -478,7 +482,7 @@ void * alarm_thread(void * arg) {
          if (status != 0)
             err_abort(status, "Create alarm thread");
          //place thread in thread list
-         thread_node = (alarm_thread_t * ) calloc(1, sizeof(alarm_thread_t));
+         thread_node = (display_thread_t * ) calloc(1, sizeof(display_thread_t));
          thread_node->thread_id = thread;
          thread_node->message_type = next->message_type;
          thread_insert(thread_node);
@@ -504,7 +508,7 @@ void * alarm_thread(void * arg) {
          next->seen_by_alarm_thread = 1;
          printf("Type C Alarm Request Processed at %d: Alarm Request With Message Number (%d) Removed\n", time(NULL), next->message_number);
 
-         alarm_thread_t * next_thread;
+         display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
             if (!alarm_list_containsmt(terminate_message_type, 'A')) {
                printf("Type C Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), terminate_message_type, terminate_message_type);
@@ -632,7 +636,7 @@ int main(int argc, char * argv[]) {
          err_abort(status, "Lock print mutex");
       printf("Alarm> ");
 
-      alarm_thread_t * nextzs;
+      display_thread_t * nextzs;
       printf("[thread: ");
       for (nextzs = thread_list; nextzs != NULL; nextzs = nextzs->link)
          printf("%d :", nextzs->message_type);
