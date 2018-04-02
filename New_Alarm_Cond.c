@@ -1,4 +1,3 @@
-#
 #include <pthread.h> 
 #include <semaphore.h>
 #include <time.h> 
@@ -260,25 +259,25 @@ alarm_t* local_alarm_insert(alarm_t * alarm, alarm_t* local_alarm_list) {
    /*
     *Place alarm in list by message type
     */
-   READ_SEMAPHORE_START
-   last = & alarm_list;
+   sem_wait(&wrt);
+   last = & local_alarm_list;
    next = * last;
    while (next != NULL && next->time < alarm->time) {
       last = & next->link;
       next = next->link;
    }
-   READ_SEMAPHORE_END
    alarm->status = pthread_self();
    alarm->link = next;
    * last = alarm;
 
 #ifdef DEBUG
    printf("[local list: ");
-   for (next = alarm_list; next != NULL; next = next->link)
+   for (next = local_alarm_list; next != NULL; next = next->link)
       printf("%d(%d)[\"%s\"] ", next->message_type,
          next->message_number /* = time (NULL)*/ , next->message);
    printf("]\n");
 #endif
+   sem_post(&wrt);
    return local_alarm_list;
 }
 
@@ -413,14 +412,14 @@ void * periodic_display_threads(void * arg) {
 
    pthread_cleanup_push(thread_terminate_cleanup, (void * ) thread_alarm_list);
 
-   while (1) {
-      status = pthread_yield();
-      if (status != 0)
-         err_abort(status, "Thread Yield");
+   status = pthread_mutex_lock( & alarm_mutex);
+   if (status != 0)
+      err_abort(status, "Lock mutex");
 
-      status = pthread_mutex_lock( & alarm_mutex);
+   while (1) {
+      /*status = pthread_mutex_lock( & alarm_mutex);
       if (status != 0)
-         err_abort(status, "Lock mutex");
+         err_abort(status, "Lock mutex");*/
 
       /* check if there is alarm whcih the message type has been changed */
       for(alarm = thread_alarm_list; alarm != NULL; last_alarm = alarm, alarm = alarm->link){
@@ -441,10 +440,11 @@ void * periodic_display_threads(void * arg) {
       }
       READ_SEMAPHORE_END
       if(alarm != NULL){
+         alarm->status = pthread_self();
          current_alarm = (alarm_t*)malloc(sizeof(alarm_t));
          memcpy(current_alarm, alarm, sizeof(alarm_t));
          current_alarm->link = NULL;
-         thread_alarm_list = local_alarm_insert(alarm, thread_alarm_list);  
+         thread_alarm_list = local_alarm_insert(current_alarm, thread_alarm_list);  
       }
       if (thread_alarm_list == NULL) {
          status = pthread_cond_wait( & alarm_cond, & alarm_mutex);
@@ -453,19 +453,20 @@ void * periodic_display_threads(void * arg) {
       } else {
          /* remove the first alarm and assign to current_alarm */
          current_alarm = thread_alarm_list;
+         current_alarm->link = NULL;
          thread_alarm_list = thread_alarm_list->link;
 
          now = time(NULL);
          int expired = 0;
          if(current_alarm->time > now){
 #ifdef DEBUG
-            printf ("[waiting: %d(%d)\"%s\"]\n", alarm->time,
-                    alarm->time - time (NULL), alarm->message);
+            printf ("[waiting: %d(%d)\"%s\"]\n", current_alarm->message_number,
+                    current_alarm->time - time (NULL), current_alarm->message);
 #endif
-            cond_time.tv_sec = alarm->time;
+            cond_time.tv_sec = current_alarm->time;
             cond_time.tv_nsec = 0;
-            time_t current_time = alarm->time;
-            while (current_time == alarm->time) {
+            time_t current_time = current_alarm->time;
+            while (current_time == current_alarm->time) {
                 status = pthread_cond_timedwait (
                     &alarm_cond, &alarm_mutex, &cond_time);
                 if (status == ETIMEDOUT) {
@@ -475,7 +476,7 @@ void * periodic_display_threads(void * arg) {
                 if (status != 0)
                     err_abort (status, "Cond timedwait");
             }
-           if (!expired)
+            if (!expired)
                 alarm_insert (alarm);
          }else{
             expired = 1;
@@ -484,8 +485,9 @@ void * periodic_display_threads(void * arg) {
             printf("(%d) %s\n", current_alarm->seconds, current_alarm->message);
             printf("Alarm With Message Type (%d) and Message Number (%d) Displayed at %d: A \n", current_alarm->message_type, current_alarm->message_number, time(NULL));
             current_alarm->time = time(NULL) + current_alarm->seconds;
-            local_alarm_insert(current_alarm, thread_alarm_list);
-         } 
+
+            thread_alarm_list = local_alarm_insert(current_alarm, thread_alarm_list);
+         }
       }
    } //end of while
 
