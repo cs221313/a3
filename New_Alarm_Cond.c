@@ -1,27 +1,40 @@
 #
 #include <pthread.h> 
+#include <semaphore.h>
 #include <time.h> 
 #include "errors.h"
 #include <regex.h> 
 #include <limits.h>
 
-   //Structure of Alarm
-   typedef struct alarm_tag {
-      struct alarm_tag * link;
-      //link in local, display_thread list
-      struct alarm_tag * link_in_thread;
-      int seconds;
-      time_t time; /* seconds from EPOCH */
-      int message_type;
-      int message_number;
-      //if alarm has been assigned to a display_thread
-      long status;
-      char message[128];
-      //if alarm has been seen by alarm_thread
-      int seen_by_alarm_thread;
-      //Type A,B, or C
-      char alarm_request_type;
-   }
+#define READ_SEMAPHORE_START sem_wait(&semaphore_mutex);\
+   readcount++;\
+   if(readcount == 1){\
+       sem_wait(&wrt);\
+   }\
+   sem_post(&semaphore_mutex);\
+   
+#define READ_SEMAPHORE_END sem_wait(&semaphore_mutex);\
+         readcount--;\
+         if(readcount == 0){\
+             sem_post(&wrt);\
+         }\
+         sem_post(&semaphore_mutex);\
+         
+//Structure of Alarm
+typedef struct alarm_tag {
+  struct alarm_tag * link;
+  int seconds;
+  time_t time; /* seconds from EPOCH */
+  int message_type;
+  int message_number;
+  //if alarm has been assigned to a display_thread
+  long status;
+  char message[128];
+  //if alarm has been seen by alarm_thread
+  int seen_by_alarm_thread;
+  //Type A,B, or C
+  char alarm_request_type;
+}
 alarm_t;
 
 //structure of thread
@@ -32,11 +45,12 @@ typedef struct display_thread_tag {
 }
 display_thread_t;
 
+sem_t semaphore_mutex, wrt;
+int readcount = 0;
+
 pthread_mutex_t alarm_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t alarm_cond = PTHREAD_COND_INITIALIZER;
-pthread_cond_t alarmA_req = PTHREAD_COND_INITIALIZER;
-//alarm list
+//alarm list which is sorted by message number
 alarm_t * alarm_list = NULL;
 //thread list
 display_thread_t * thread_list = NULL;
@@ -65,8 +79,8 @@ void thread_insert(display_thread_t * thread) {
 #ifdef DEBUG
    printf("[thread: ");
    for (next = thread_list; next != NULL; next = next->link)
-      printf("%d(%d)[\"%s\"] ", next->time,
-         next->time /* = time (NULL)*/ , next->message);
+      printf("%d(%d) ", next->message_type,
+         next->thread_id /* = time (NULL)*/);
    printf("]\n");
 #endif
 
@@ -77,11 +91,17 @@ int alarm_list_containsmn(int message_number, char alarm_request_type) {
    alarm_t * next;
    int status;
 
+   READ_SEMAPHORE_START
+   
    for (next = alarm_list; next != NULL; next = next->link) {
       if (next->message_number == message_number && next->alarm_request_type == alarm_request_type) {
+         READ_SEMAPHORE_END
          return 1;
       }
    }
+   
+   READ_SEMAPHORE_END
+   
    return 0;
 
 }
@@ -91,26 +111,39 @@ alarm_t * alarm_with_the_message_number(int message_number, char alarm_request_t
    alarm_t * next;
    int status;
 
+   READ_SEMAPHORE_START
+   
    for (next = alarm_list; next != NULL; next = next->link) {
       if (next->message_number == message_number && alarm_request_type == next->alarm_request_type) {
+         READ_SEMAPHORE_END
+         
          return next;
       }
    }
+   READ_SEMAPHORE_END
+   
    return NULL;
 }
 
 //Returns alarm with message type and request type
 alarm_t * alarm_with_the_message_type(int message_type, char alarm_request_type) {
-      alarm_t * next;
-      int status;
+   alarm_t * next;
+   int status;
 
-      for (next = alarm_list; next != NULL; next = next->link) {
-         if (next->message_type == message_type && alarm_request_type == next->alarm_request_type) {
-            return next;
-         }
+   READ_SEMAPHORE_START
+   
+   for (next = alarm_list; next != NULL; next = next->link) {
+      if (next->message_type == message_type && alarm_request_type == next->alarm_request_type) {
+         READ_SEMAPHORE_END
+         
+         return next;
       }
-      return NULL;
    }
+   READ_SEMAPHORE_END
+         
+   return NULL;
+}
+
    //Replace alarm with the new information
 void alarm_replace(int message_number, int alarm_second, int message_type, char * message) {
    int status;
@@ -125,6 +158,14 @@ void alarm_replace(int message_number, int alarm_second, int message_type, char 
    alarm->seen_by_alarm_thread = 0;
    alarm->alarm_request_type = 'A';
    strcpy(alarm->message, message);
+#ifdef DEBUG
+   alarm_t* next;
+   printf("[list: ");
+   for (next = alarm_list; next != NULL; next = next->link)
+      printf("%d(%d)[\"%s\"] ", next->message_type,
+         next->message_number /* = time (NULL)*/ , next->message);
+   printf("]\n");
+#endif
 
 }
 
@@ -137,12 +178,18 @@ void alarm_replace(int message_number, int alarm_second, int message_type, char 
 int alarm_list_containsmt(int message_type, char alarm_request_type) {
    alarm_t * next;
 
+   READ_SEMAPHORE_START
+   
    for (next = alarm_list; next != NULL; next = next->link) {
       if (next->message_type == message_type && 
           next->alarm_request_type == alarm_request_type) {
+         READ_SEMAPHORE_END
+         
          return 1;
       }
    }
+   READ_SEMAPHORE_END
+         
    return 0;
 
 }
@@ -166,43 +213,73 @@ void alarm_insert(alarm_t * alarm) {
    int status;
    alarm_t **last, *next;
    /*
-    *Call for mutex so the conditon variable in thread to synched with this function
-    */
-   status = pthread_mutex_lock( &alarm_mutex);
-   if (status != 0)
-      err_abort(status, "Lock mutex");
-   /*
     *Place alarm in list by message type
     */
    last = & alarm_list;
    next = * last;
+   sem_wait(&wrt);
    while (next != NULL) {
-      if (next->message_type >= alarm->message_type) {
-         alarm->link = next; * last = alarm;
+      if (next->message_number > alarm->message_number) {
+         alarm->link = next;
+         * last = alarm;
          break;
       }
       last = & next->link;
       next = next->link;
    }
-   if (next == NULL) { * last = alarm;
+   if (next == NULL) {
+      * last = alarm;
       alarm->link = NULL;
    }
 
 #ifdef DEBUG
    printf("[list: ");
    for (next = alarm_list; next != NULL; next = next->link)
-      printf("%d(%d)[\"%s\"] ", next->time,
-         next->time /* = time (NULL)*/ , next->message);
+      printf("%d(%d)[\"%s\"] ", next->message_type,
+         next->message_number /* = time (NULL)*/ , next->message);
    printf("]\n");
 #endif
-
-   status = pthread_mutex_unlock( & alarm_mutex);
-   if (status != 0)
-      err_abort(status, "Unlock mutex");
+   sem_post(&wrt);
    status = pthread_cond_signal( & alarm_cond);
    if (status != 0)
       err_abort(status, "Signal cond");
 
+}
+
+/**
+ * insert alarm into local alarm list which is in the periodic thread.
+ * \param alarm alarm to be inserted.
+ * \param local_alarm_list local alarm list which is in the periodic thread.
+ * \return new local_alarm_list which contains the alarm node. local_alarm_list 
+ *         is sorted by time.
+ */
+
+alarm_t* local_alarm_insert(alarm_t * alarm, alarm_t* local_alarm_list) {
+   int status;
+   alarm_t **last, *next;
+   /*
+    *Place alarm in list by message type
+    */
+   READ_SEMAPHORE_START
+   last = & alarm_list;
+   next = * last;
+   while (next != NULL && next->time < alarm->time) {
+      last = & next->link;
+      next = next->link;
+   }
+   READ_SEMAPHORE_END
+   alarm->status = pthread_self();
+   alarm->link = next;
+   * last = alarm;
+
+#ifdef DEBUG
+   printf("[local list: ");
+   for (next = alarm_list; next != NULL; next = next->link)
+      printf("%d(%d)[\"%s\"] ", next->message_type,
+         next->message_number /* = time (NULL)*/ , next->message);
+   printf("]\n");
+#endif
+   return local_alarm_list;
 }
 
 //remove alarm from global list, and free it
@@ -213,9 +290,7 @@ void alarm_remover(alarm_t * alarm) {
    /*
     *Lock mutex so the threads are synched
     */
-   status = pthread_mutex_lock( & alarm_mutex);
-   if (status != 0)
-      err_abort(status, "Lock mutex");
+   sem_wait(&wrt);
 
    for (temp_alarm = alarm_list; temp_alarm != NULL; temp_alarm_past = temp_alarm, temp_alarm = (temp_alarm->link)) {
       if (temp_alarm == alarm) {
@@ -232,15 +307,11 @@ void alarm_remover(alarm_t * alarm) {
 #ifdef DEBUG
    printf("[list: ");
    for (temp_alarm = alarm_list; temp_alarm != NULL; temp_alarm = temp_alarm->link)
-      printf("%d(%d)[\"%s\"] ", temp_alarm->time,
-         temp_alarm->time /* = time (NULL)*/ , temp_alarm->message);
+      printf("%d(%d)[\"%s\"] ", temp_alarm->message_type,
+         temp_alarm->message_number /* = time (NULL)*/ , temp_alarm->message);
    printf("]\n");
 #endif
-
-   status = pthread_mutex_unlock( & alarm_mutex);
-   if (status != 0)
-      err_abort(status, "Unlock mutex");
-
+   sem_post(&wrt);
 }
 
 //deletes threads that are no longer needed
@@ -291,10 +362,10 @@ void thread_terminate_cleanup(void * list) {
 
 #ifdef DEBUG
    printf("[list: ");
-   temp_alarm = (alarm_t * ) list;
+   alarm_t* temp_alarm = (alarm_t * ) list;
    for (; temp_alarm != NULL; temp_alarm = temp_alarm->link)
-      printf("%d(%d)[\"%s\"] ", temp_alarm->time,
-         temp_alarm->time /* = time (NULL)*/ , temp_alarm->message);
+      printf("%d(%d)[\"%s\"] ", temp_alarm->message_type,
+         temp_alarm->message_number /* = time (NULL)*/ , temp_alarm->message);
    printf("]\n");
 #endif
 
@@ -303,14 +374,39 @@ void thread_terminate_cleanup(void * list) {
       err_abort(status, "Unlock mutex");
 }
 
-//periodic_display_threads
+/**
+ * check if the message_type has been changed.
+ * \param alarm this alarm is in the periodically display thread.
+ * return 1 if that alarm message type has been changed in the global alarm list. otherwise return 0.
+ */
+int message_type_changed(alarm_t* alarm)
+{
+   alarm_t *tmp_alarm, *last_alarm;
+   READ_SEMAPHORE_START
+   
+   for(tmp_alarm = alarm_list; tmp_alarm != NULL; last_alarm = tmp_alarm, tmp_alarm = tmp_alarm->link){
+      if(alarm->message_number == tmp_alarm->message_number &&
+         alarm->message_type != tmp_alarm->message_type){
+            READ_SEMAPHORE_END
+            return 1;
+      }
+   }
+   READ_SEMAPHORE_END
+   return 0;
+}
+
+/**
+ * periodic display threads
+ * \param arg message type
+ */
 void * periodic_display_threads(void * arg) {
    //holds the current alarm being kept, and the local list
-   alarm_t * alarm, * current_alarm, * thread_alarm_list;
+   alarm_t *alarm, *current_alarm, *thread_alarm_list;  //thread_alarm_list sorted by time
+   alarm_t *last_alarm;
    time_t now;
    int status;
    int type_of_thread = * ((int * ) arg);
-   free(arg);
+   struct timespec cond_time;
 
    current_alarm = NULL;
    thread_alarm_list = NULL;
@@ -318,7 +414,6 @@ void * periodic_display_threads(void * arg) {
    pthread_cleanup_push(thread_terminate_cleanup, (void * ) thread_alarm_list);
 
    while (1) {
-
       status = pthread_yield();
       if (status != 0)
          err_abort(status, "Thread Yield");
@@ -327,96 +422,72 @@ void * periodic_display_threads(void * arg) {
       if (status != 0)
          err_abort(status, "Lock mutex");
 
+      /* check if there is alarm whcih the message type has been changed */
+      for(alarm = thread_alarm_list; alarm != NULL; last_alarm = alarm, alarm = alarm->link){
+         if(message_type_changed(alarm)){
+            last_alarm = alarm->link;
+            printf("Stopped Displaying Replaced Alarm With Message Type (%d) at %d:A\n", current_alarm->message_type, time(NULL));
+            free(alarm);
+         }
+      }
+      READ_SEMAPHORE_START
       alarm = alarm_list;
 
-      if (alarm != NULL) {
-         while (alarm->message_type != type_of_thread || alarm->status != 0 || alarm->alarm_request_type != 'A') {
-            if (alarm->link != NULL)
-               alarm = alarm->link;
-            else {
-               alarm = NULL;
-               break;
-            }
-
-         }
+      /* get an alarm which message_type == the given parameter and status == 0 and 
+         alarm_request_type == 'A' */
+      while (alarm != NULL && (alarm->message_type != type_of_thread ||
+             alarm->status != 0 || alarm->alarm_request_type != 'A')) {
+         alarm = alarm->link;
       }
-
-      if (alarm == NULL && thread_alarm_list == NULL) {
-         status = pthread_cond_wait( & alarmA_req, & alarm_mutex);
+      READ_SEMAPHORE_END
+      if(alarm != NULL){
+         current_alarm = (alarm_t*)malloc(sizeof(alarm_t));
+         memcpy(current_alarm, alarm, sizeof(alarm_t));
+         current_alarm->link = NULL;
+         thread_alarm_list = local_alarm_insert(alarm, thread_alarm_list);  
+      }
+      if (thread_alarm_list == NULL) {
+         status = pthread_cond_wait( & alarm_cond, & alarm_mutex);
          if (status != 0)
             err_abort(status, "Wait on cond");
-         sleep(0);
-         status = pthread_mutex_unlock( & alarm_mutex);
-         if (status != 0)
-            err_abort(status, "Unlock mutex");
-         continue;
       } else {
-         sleep(0);
-         status = pthread_mutex_unlock( & alarm_mutex);
-         if (status != 0)
-            err_abort(status, "Unlock mutex");
-         if (alarm != NULL) {
-            alarm->status = pthread_self();
-            alarm->time = time(NULL) + alarm->seconds;
-            alarm_t * * last, * next;
-
-            last = & thread_alarm_list;
-            next = * last;
-            while (next != NULL) {
-               if (next->time >= alarm->time) {
-                  alarm->link_in_thread = next; * last = alarm;
-                  break;
-               }
-               last = & next->link_in_thread;
-               next = next->link_in_thread;
-            }
-
-            if (next == NULL) { * last = alarm;
-               alarm->link_in_thread = NULL;
-            }
-
-            current_alarm = thread_alarm_list;
-            alarm = NULL;
-         }
-
-         if (current_alarm->message_type != type_of_thread) {
-            printf("Stopped Displaying Replaced Alarm With Message Type (%d) at %d:A\n", current_alarm->message_type, time(NULL));
-            if (current_alarm->link_in_thread == NULL)
-               thread_alarm_list = NULL;
-            else
-               current_alarm->status = 0;
-            current_alarm->link_in_thread = NULL;
-            thread_alarm_list = current_alarm->link_in_thread;
-            current_alarm = thread_alarm_list;
-            continue;
-         }
+         /* remove the first alarm and assign to current_alarm */
+         current_alarm = thread_alarm_list;
+         thread_alarm_list = thread_alarm_list->link;
 
          now = time(NULL);
-         if (current_alarm->time <= now) {
-            status = pthread_mutex_lock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Lock print mutex");
-
+         int expired = 0;
+         if(current_alarm->time > now){
+#ifdef DEBUG
+            printf ("[waiting: %d(%d)\"%s\"]\n", alarm->time,
+                    alarm->time - time (NULL), alarm->message);
+#endif
+            cond_time.tv_sec = alarm->time;
+            cond_time.tv_nsec = 0;
+            time_t current_time = alarm->time;
+            while (current_time == alarm->time) {
+                status = pthread_cond_timedwait (
+                    &alarm_cond, &alarm_mutex, &cond_time);
+                if (status == ETIMEDOUT) {
+                    expired = 1;
+                    break;
+                }
+                if (status != 0)
+                    err_abort (status, "Cond timedwait");
+            }
+           if (!expired)
+                alarm_insert (alarm);
+         }else{
+            expired = 1;
+         }
+         if (expired) {
             printf("(%d) %s\n", current_alarm->seconds, current_alarm->message);
             printf("Alarm With Message Type (%d) and Message Number (%d) Displayed at %d: A \n", current_alarm->message_type, current_alarm->message_number, time(NULL));
-
-            status = pthread_mutex_unlock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Unlock print mutex");
-
-            if (current_alarm->link_in_thread == NULL)
-               thread_alarm_list = NULL;
-            else
-               thread_alarm_list = current_alarm->link_in_thread;
-            alarm_remover(current_alarm);
-            current_alarm = thread_alarm_list;
-
-         } else
-            continue;
-
+            current_alarm->time = time(NULL) + current_alarm->seconds;
+            local_alarm_insert(current_alarm, thread_alarm_list);
+         } 
       }
-
-   }
+   } //end of while
 
    pthread_cleanup_pop(1);
 }
@@ -440,21 +511,17 @@ void * alarm_thread(void * arg) {
       if (status != 0)
          err_abort(status, "Wait on cond");
 
-      status = pthread_mutex_lock( &print_mutex);
-      if (status != 0)
-         err_abort(status, "Lock print mutex");
 
       alarm_t * next;
+      READ_SEMAPHORE_START
       //get alarm from alarm_list that hasn't been seen by alarm_thread
       for (next = alarm_list; next != NULL; next = next->link) {
          if (next->seen_by_alarm_thread == 0)
             break;
       }
+      READ_SEMAPHORE_END
       //If Request A
       if (next->alarm_request_type == 'A') {
-         status = pthread_cond_broadcast( & alarmA_req);
-         if (status != 0)
-            err_abort(status, "Broadcast cond");
          next->seen_by_alarm_thread = 1;
          display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
@@ -477,10 +544,11 @@ void * alarm_thread(void * arg) {
       }
       //If request B
       if (next->alarm_request_type == 'B') {
-         int * i = malloc(sizeof( * i)); * i = next->message_type;
+         int * i = malloc(sizeof( * i));
+         * i = next->message_type;
          status = pthread_create( & thread, NULL, periodic_display_threads, (void * ) i);
          if (status != 0)
-            err_abort(status, "Create alarm thread");
+            err_abort(status, "Create periodic display thread");
          //place thread in thread list
          thread_node = (display_thread_t * ) calloc(1, sizeof(display_thread_t));
          thread_node->thread_id = thread;
@@ -534,11 +602,6 @@ void * alarm_thread(void * arg) {
          if (status != 0)
             err_abort(status, "Lock mutex");
       }
-
-      status = pthread_mutex_unlock( & print_mutex);
-      if (status != 0)
-         err_abort(status, "Unlock print mutex");
-
    }
 }
 
@@ -603,6 +666,33 @@ int get_cmd_type(char * line, int * msg_type, unsigned int * alarm_second, int *
    return ret_value;
 }
 
+alarm_t* create_alarm(unsigned int alarm_second, 
+                      int message_type,
+                      char request_type,
+                      int message_number,
+                      char* message)
+{
+   alarm_t *alarm;
+   alarm = (alarm_t * ) malloc(sizeof(alarm_t));
+   if (alarm == NULL)
+      errno_abort("Allocate alarm");
+  
+   alarm->seconds = alarm_second;
+   alarm->time = time(NULL) + alarm->seconds;
+   alarm->message_type = message_type;
+   alarm->status = 0;
+   alarm->link = NULL;
+   alarm->seen_by_alarm_thread = 0;
+   alarm->alarm_request_type = request_type;
+   alarm->message_number = message_number;
+   if(message != NULL)
+   {
+      strcpy(alarm->message, message);
+   }
+
+   return alarm;
+}
+
 //Main Function, or Main thread
 int main(int argc, char * argv[]) {
    //Gets error if using pthread funciton
@@ -628,12 +718,11 @@ int main(int argc, char * argv[]) {
       if (status != 0)
          err_abort(status, "Create alarm thread");
    }
-
+   
+   sem_init(&semaphore_mutex, 0, 1);
+   sem_init(&wrt, 0, 1);
    //Loop runs until terminated
    while (1) {
-      status = pthread_mutex_lock( & print_mutex);
-      if (status != 0)
-         err_abort(status, "Lock print mutex");
       printf("Alarm> ");
 
       display_thread_t * nextzs;
@@ -643,144 +732,66 @@ int main(int argc, char * argv[]) {
       printf("]\n");
 
       alarm_t * temp_alarmzs;
-      printf("[list: ");
-      for (temp_alarmzs = alarm_list; temp_alarmzs != NULL; temp_alarmzs = temp_alarmzs->link)
-         printf("%d(%d)[\"%s\"] ", temp_alarmzs->time, temp_alarmzs->message_type, temp_alarmzs->message);
-      printf("]\n");
-
-      status = pthread_mutex_unlock( & print_mutex);
-      if (status != 0)
-         err_abort(status, "Unlock print mutex");
       if (fgets(line, sizeof(line), stdin) == NULL) exit(0);
       if (strlen(line) <= 1) continue;
 
       //Get Command Type
       cmd_type = get_cmd_type(line, & message_type, & alarm_second, & message_number, message);
       switch (cmd_type) {
-         //If Type B request
-      case 1:
+      case 1:   //Type B
          {
-            status = pthread_mutex_lock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Lock print mutex");
             //Does not exist any Type A alarm Request with same Message Type
             if (!alarm_list_containsmt(message_type, 'A')) {
                printf("Type B Alarm Request Error: No Alarm Request With Message Type (%d)!\n", message_type);
-               status = pthread_mutex_unlock( & print_mutex);
-               if (status != 0)
-                  err_abort(status, "Unlock print mutex");
                break;
             }
             //IF typeB already exists
             if (alarm_list_containsmt(message_type, 'B')) {
                printf("Error: More Than One Type B Alarm Request With Message Type (%d)!\n", message_type);
-               status = pthread_mutex_unlock( & print_mutex);
-               if (status != 0)
-                  err_abort(status, "Unlock print mutex");
                break;
             }
-            //else place in alarm list
 
-            alarm = (alarm_t * ) malloc(sizeof(alarm_t));
-            if (alarm == NULL)
-               errno_abort("Allocate alarm");
-            //alarm->seconds = alarm_second;
-            //alarm->time = time (NULL) + alarm->seconds;
-            alarm->message_type = message_type;
-            alarm->status = 0;
-            alarm->link = NULL;
-            //alarm->message_number=message_number;
-            alarm->seen_by_alarm_thread = 0;
-            alarm->alarm_request_type = 'B';
-            //strcpy(alarm->message, message);
+            alarm = create_alarm(0, message_type, 'B', 0, NULL);
             alarm_insert(alarm);
 
             printf("Type B Create Thread Alarm Request For Message Type (%d) Inserted Into Alarm List at %d!\n",
                    message_type, time(NULL));
-            status = pthread_mutex_unlock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Unlock print mutex");
             break;
-
-            // Type C
          }
-      case 2:
+      case 2:   //Type C
          {
-            status = pthread_mutex_lock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Lock print mutex");
-
             //No Type A with same message_number
             if (!alarm_list_containsmn(message_number, 'A')) {
                printf("Error: No Alarm Request With Message Number (%d) to Cancel!\n", message_number);
-               status = pthread_mutex_unlock( & print_mutex);
-               if (status != 0)
-                  err_abort(status, "Unlock print mutex");
                break;
             }
 
             if (alarm_list_containsmn(message_number, 'C')) {
                //Already a cancel request made
                printf("Error: More Than One Request to Cancel Alarm Request With Message Number (%d)!\n", message_number);
-               status = pthread_mutex_unlock( & print_mutex);
-               if (status != 0)
-                  err_abort(status, "Unlock print mutex");
                break;
             }
 
-            alarm = (alarm_t * ) malloc(sizeof(alarm_t));
-            if (alarm == NULL)
-               errno_abort("Allocate alarm");
-            //alarm->seconds = alarm_second;
-            //alarm->time = time (NULL) + alarm->seconds;
-            //alarm->message_type = message_type;
-            alarm->status = 0;
-            alarm->link = NULL;
-            alarm->message_number = message_number;
-            alarm->seen_by_alarm_thread = 0;
-            alarm->alarm_request_type = 'C';
-            //strcpy(alarm->message, message);
+            alarm = create_alarm(0, 0, 'C', message_number, NULL);
             alarm_insert(alarm);
 
             printf("Type C Cancel Alarm Request With Message Number (%d) Inserted Into Alarm List at %d: C\n", message_number, time(NULL));
 
-            status = pthread_mutex_unlock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Unlock print mutex");
             break;
-
-            //Type A
          }
-      case 3:
+      case 3:   //Type A
          {
-            status = pthread_mutex_lock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Lock print mutex");
             //if type A with same message_number exists replace it
             if (alarm_list_containsmn(message_number, 'A')) {
                alarm_replace(message_number, alarm_second, message_type, message);
                printf("Type A Replacement Alarm Request With Message Number (%d) Inserted Into Alarm List at %d: A\n", message_number, time(NULL));
 
             } else {
-
-               alarm = (alarm_t * ) malloc(sizeof(alarm_t));
-               if (alarm == NULL)
-                  errno_abort("Allocate alarm");
-               alarm->seconds = alarm_second;
-               alarm->time = time(NULL) + alarm->seconds;
-               alarm->message_type = message_type;
-               alarm->status = 0;
-               alarm->link = NULL;
-               alarm->seen_by_alarm_thread = 0;
-               alarm->alarm_request_type = 'A';
-               alarm->message_number = message_number;
-               strcpy(alarm->message, message);
+            
+               alarm = create_alarm(alarm_second, message_type, 'A', message_number, message);
                alarm_insert(alarm);
                printf("Type A Alarm Request With Message Number (%d) Inserted Into Alarm List at %d: A\n", alarm->message_number, time(NULL));
             }
-            status = pthread_mutex_unlock( & print_mutex);
-            if (status != 0)
-               err_abort(status, "Unlock print mutex");
             break;
 
          }
