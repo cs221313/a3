@@ -159,16 +159,17 @@ void alarm_replace(int message_number, int alarm_second, int message_type, char 
    alarm->alarm_request_type = 'A';
    strcpy(alarm->message, message);
 #ifdef DEBUG
+   printf("message number %d has been replaced\n", message_number);
    alarm_t* next;
-   printf("[list: ");
+   printf("[list replaced: ");
    for (next = alarm_list; next != NULL; next = next->link)
       printf("%d(%d)[\"%s\"] ", next->message_type,
          next->message_number /* = time (NULL)*/ , next->message);
    printf("]\n");
    printf("alarm signal\n");
 #endif
-   //status = pthread_cond_signal( & alarm_cond);
-   status = pthread_cond_broadcast( & alarm_cond);
+   status = pthread_cond_signal( & alarm_cond);
+   //status = pthread_cond_broadcast( & alarm_cond);
    if (status != 0)
       err_abort(status, "Signal cond");
 }
@@ -245,8 +246,8 @@ void alarm_insert(alarm_t * alarm) {
 #endif
    sem_post(&wrt);
    printf("alarm signal\n");
-   //status = pthread_cond_signal( & alarm_cond);
-   status = pthread_cond_broadcast( & alarm_cond);
+   status = pthread_cond_signal( & alarm_cond);
+   //status = pthread_cond_broadcast( & alarm_cond);
    if (status != 0)
       err_abort(status, "Signal cond");
 
@@ -335,6 +336,9 @@ void obsolescent_thread(int terminated_message_type) {
           *Terminate thread and remove from linked list
           */
          pthread_cancel(temp_thread->thread_id);
+#ifdef DEBUG
+         printf("thread %d canceled\n", temp_thread->thread_id);
+#endif
          if (thread_list == temp_thread)
             thread_list = temp_thread->link;
          else
@@ -580,13 +584,13 @@ void * alarm_thread(void * arg) {
          display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
             if (!alarm_list_containsmt(next_thread->message_type, 'A')) {
-               printf("Type A Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), next_thread->message_type, next_thread->message_type);
                /*status = pthread_mutex_unlock( & alarm_mutex);
                if (status != 0)
                   err_abort(status, "unlock mutex");*/
 
                alarm_remover(alarm_with_the_message_type(next_thread->message_type, 'B'));
                obsolescent_thread(next_thread->message_type);
+               printf("Type A Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), next_thread->message_type, next_thread->message_type);
             }
          }
 
