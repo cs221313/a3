@@ -475,7 +475,12 @@ void * periodic_display_threads(void * arg) {
          local_alarm_insert(current_alarm, &thread_alarm_list);  
       }
       if (thread_alarm_list == NULL) {
-         printf("exception case\n");
+#ifdef DEBUG          
+         printf("thread %d exit\n", pthread_self());
+#endif
+         status = pthread_mutex_unlock( & alarm_mutex);
+         if (status != 0)
+            err_abort(status, "unlock mutex");
          return;
       } else {
          /* remove the first alarm and assign to current_alarm */
@@ -584,12 +589,12 @@ void * alarm_thread(void * arg) {
          display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
             if (!alarm_list_containsmt(next_thread->message_type, 'A')) {
-               /*status = pthread_mutex_unlock( & alarm_mutex);
+               status = pthread_mutex_unlock( & alarm_mutex);
                if (status != 0)
-                  err_abort(status, "unlock mutex");*/
+                  err_abort(status, "unlock mutex");
 
                alarm_remover(alarm_with_the_message_type(next_thread->message_type, 'B'));
-               obsolescent_thread(next_thread->message_type);
+               
                printf("Type A Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), next_thread->message_type, next_thread->message_type);
             }
          }
