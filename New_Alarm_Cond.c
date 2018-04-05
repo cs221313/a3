@@ -56,7 +56,11 @@ alarm_t * alarm_list = NULL;
 display_thread_t * thread_list = NULL;
 int alarm_thread_created = 0;
 
-//Insert Thread in global thread list
+/**
+ * Insert thread in global thread list. Use thread list to manage the periodic 
+ * display thread.
+ * \param thread Thread node to be inserted into thread list.
+ */
 void thread_insert(display_thread_t * thread) {
    int status;
    display_thread_t * * last, * next;
@@ -106,7 +110,12 @@ int alarm_list_containsmn(int message_number, char alarm_request_type) {
 
 }
 
-//Returns alarm with message number and request number
+/**
+ * Find alarm with the given message number and request type.
+ * \param message_number Message number are going to be found in global alarm list.
+ * \param alarm_request_type Alarm request type are going to be found in global alarm list.
+ * \return Alarm point if that alarm is found in the global alarm list, otherwise return NULL.
+ */
 alarm_t * alarm_with_the_message_number(int message_number, char alarm_request_type) {
    alarm_t * next;
    int status;
@@ -125,7 +134,12 @@ alarm_t * alarm_with_the_message_number(int message_number, char alarm_request_t
    return NULL;
 }
 
-//Returns alarm with message type and request type
+/**
+ * Find alarm with the given message type and request type.
+ * \param message_type Message type are going to be found in global alarm list.
+ * \param alarm_request_type Alarm request type are going to be found in global alarm list.
+ * \return Alarm point if that alarm is found in the global alarm list, otherwise return NULL.
+ */
 alarm_t * alarm_with_the_message_type(int message_type, char alarm_request_type) {
    alarm_t * next;
    int status;
@@ -144,12 +158,23 @@ alarm_t * alarm_with_the_message_type(int message_type, char alarm_request_type)
    return NULL;
 }
 
-   //Replace alarm with the new information
+/**
+ * Replace alarm with the new information. If that message number is not found int alarm 
+ * list, it will do nothing.
+ * \param message_number The infomation of the alarm with this message_number will be changed.
+ * \param alarm_second New alarm second will be replaced to that alarm.
+ * \param message_type New message type will be replaced to that alarm.
+ * \param message New message will be replaced to that alarm.
+ */
 void alarm_replace(int message_number, int alarm_second, int message_type, char * message) {
    int status;
 
    alarm_t * alarm;
    alarm = alarm_with_the_message_number(message_number, 'A');
+   if(alarm == NULL){
+      return;
+   }
+
    alarm->seconds = alarm_second;
    alarm->time = time(NULL) + alarm->seconds;
    alarm->message_type = message_type;
@@ -199,7 +224,12 @@ int alarm_list_containsmt(int message_type, char alarm_request_type) {
 
 }
 
-//Checks to see if thread list contains thread with same message type
+/**
+ * Checks to see if thread list contains thread with same message type.
+ * \param message_type Check parameter message type is already in the thread list
+ * or not. If it existed, it means that the periodic display thread has been created.
+ * \return 1 If it is existed, otherwise return 0.
+ */
 int thread_list_containsmt(int message_type) {
    display_thread_t * next;
    int status;
@@ -213,7 +243,10 @@ int thread_list_containsmt(int message_type) {
    }
 }
 
-//insert alarm into global list
+/**
+ * Insert alarm into global alarm list.
+ * \param alarm Alarm to be inserted into global alarm list.
+ */
 void alarm_insert(alarm_t * alarm) {
    int status;
    alarm_t **last, *next;
@@ -249,15 +282,12 @@ void alarm_insert(alarm_t * alarm) {
    //status = pthread_cond_broadcast( & alarm_cond);
    if (status != 0)
       err_abort(status, "Signal cond");
-
 }
 
 /**
- * insert alarm into local alarm list which is in the periodic thread.
- * \param alarm alarm to be inserted.
- * \param local_alarm_list local alarm list which is in the periodic thread.
- * \return new local_alarm_list which contains the alarm node. local_alarm_list 
- *         is sorted by time.
+ * Insert alarm into local alarm list which is in the periodic thread.
+ * \param alarm Alarm to be inserted.
+ * \param local_alarm_list Local alarm list which is in the periodic thread.
  */
 
 void local_alarm_insert(alarm_t * alarm, alarm_t** local_alarm_list) {
@@ -290,7 +320,10 @@ void local_alarm_insert(alarm_t * alarm, alarm_t** local_alarm_list) {
    return;
 }
 
-//remove alarm from global list, and free it
+/**
+ * Remove alarm from global list and free it.
+ * \param alarm Alarm is to be removed from alarm list.
+ */
 void alarm_remover(alarm_t * alarm) {
    alarm_t * temp_alarm, * temp_alarm_past;
    int status;
@@ -323,16 +356,17 @@ void alarm_remover(alarm_t * alarm) {
 }
 
 /**
- * check if the message_type has been changed.
+ * Check if the message_type has been changed.
  * \param alarm this alarm is in the periodically display thread.
- * return 1 if that alarm message type has been changed in the global alarm list. otherwise return 0.
+ * \return 1 If that alarm message type has been changed in the global alarm list,
+ * otherwise return 0.
  */
 int message_type_changed(alarm_t* alarm)
 {
-   alarm_t *tmp_alarm, *last_alarm;
+   alarm_t *tmp_alarm;
    READ_SEMAPHORE_START
    
-   for(tmp_alarm = alarm_list; tmp_alarm != NULL; last_alarm = tmp_alarm, tmp_alarm = tmp_alarm->link){
+   for(tmp_alarm = alarm_list; tmp_alarm != NULL; tmp_alarm = tmp_alarm->link){
       if(alarm->message_number == tmp_alarm->message_number &&
          alarm->message_type != tmp_alarm->message_type){
             READ_SEMAPHORE_END
@@ -344,13 +378,13 @@ int message_type_changed(alarm_t* alarm)
 }
 
 /**
- * check if the new alarm is already in the local alarm list. refer to test case 18.
- * this case is user change the message information for the existed message number 
+ * Check if the new alarm is already in the local alarm list. Refer to test case 18.
+ * This case is when user changes the message information for the existed message number 
  * alarm.
- * \param alarm new alarm found in the alarm_list.
- * \param thread_alarm_list local alarm list of periodic display thread.
- * \return if new alarm is already in the local alarm list, return the point of that 
- *         alarm. otherwise return NULL.
+ * \param alarm New alarm found in the alarm_list.
+ * \param thread_alarm_list Local alarm list of periodic display thread.
+ * \return If new alarm is already in the local alarm list, return the point of that 
+ *         alarm. Otherwise return NULL.
  */
 alarm_t* get_existed_alarm(alarm_t* alarm, alarm_t* thread_alarm_list)
 {
@@ -365,7 +399,37 @@ alarm_t* get_existed_alarm(alarm_t* alarm, alarm_t* thread_alarm_list)
 }
 
 /**
- * periodic display threads
+ * Check if the alarm is removed in alarm_list.
+ * \param alarm This alarm is in the periodically display thread.
+ * \return 1 If that alarm message type has been removed in the global alarm list,
+ * otherwise return 0.
+ */
+int alarm_removed(alarm_t *alarm)
+{
+   alarm_t *tmp_alarm;
+   READ_SEMAPHORE_START
+   
+   for(tmp_alarm = alarm_list; tmp_alarm != NULL; tmp_alarm = tmp_alarm->link){
+      if(alarm->message_number == tmp_alarm->message_number &&
+         alarm->message_type == tmp_alarm->message_type){
+            READ_SEMAPHORE_END
+            return 0;
+      }
+   }
+   READ_SEMAPHORE_END
+   return 1;
+}
+
+/**
+ * Periodic display threads, This thread will keep displaying the type A alarm in its
+ * local alarm list. 
+ * It will periodically check if there is new the message type that it is this thread
+ * responsible for. If it has found, it will copy that new alarm into its local
+ * alarm list. 
+ * It also periodically checks if there is an alarm removed from global alarm list or
+ * alarm message type has been change. If it has found, it will remove that alarm from
+ * local alarm list.
+ * If there is no alarm in the local alarm list, this thread will be terminated by itself
  * \param arg message type
  */
 void * periodic_display_threads(void * arg) {
@@ -383,7 +447,7 @@ void * periodic_display_threads(void * arg) {
    while (1) {
       /* check if there is alarm which the message type has been changed */
       alarm_t **p_alarm = &thread_alarm_list;
-      while(*p_alarm && !message_type_changed(*p_alarm)){
+      while(*p_alarm && !message_type_changed(*p_alarm) && !alarm_removed(*p_alarm)){
          p_alarm = &(*p_alarm)->link;
       }
 
@@ -472,7 +536,9 @@ void * periodic_display_threads(void * arg) {
             expired = 1;
          }
          if (expired) {
+#ifdef DEBUG
             printf("(%d) %s\n", current_alarm->seconds, current_alarm->message);
+#endif
             printf("Alarm With Message Type (%d) and Message Number (%d) Displayed at %d: A \n",
                    current_alarm->message_type, current_alarm->message_number, time(NULL));
             current_alarm->time = time(NULL) + current_alarm->seconds;
@@ -482,7 +548,18 @@ void * periodic_display_threads(void * arg) {
    } //end of while
 }
 
-//alarm thread
+/**
+ * Alarm thread to check the new alarm in the alarm list. 
+ * After finding message type of new alarm of type A was changed and there is no original
+ * message type existed in alarm list, then remove the related type B alarm and terminate 
+ * the related periodic display thread
+ * If find a new message type of B, it will create a new periodic display thread for that
+ * message type
+ * If find a new message type of C, it will check the message number of alarm meesage type 
+ * A is existed in alarm list, if it is existed, that alarm will be removed from alarm list.
+ * If that is the only alarm of that message type, the periodic display thread will be 
+ * terminated.
+ */
 void * alarm_thread(void * arg) {
    //gets status of lock
    int status;
@@ -556,7 +633,6 @@ void * alarm_thread(void * arg) {
                alarm_remover(alarm_with_the_message_type(terminate_message_type, 'B'));
             }
          }
-
 
          alarm_remover(next);
       }
@@ -654,7 +730,12 @@ alarm_t* create_alarm(unsigned int alarm_second,
    return alarm;
 }
 
-//Main Function, or Main thread
+/**
+ * Main Function, or Main thread
+ * It is responible for get the command from input. It will first check the correction of command.
+ * If the command it valid, it will insert it into alarm list, for other thread to read.
+ * It also creates alarm thread to monitor the alarm thread.
+ */
 int main(int argc, char * argv[]) {
    //Gets error if using pthread funciton
    int status;
