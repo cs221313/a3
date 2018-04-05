@@ -411,6 +411,27 @@ int message_type_changed(alarm_t* alarm)
 }
 
 /**
+ * check if the new alarm is already in the local alarm list. refer to test case 18.
+ * this case is user change the message information for the existed message number 
+ * alarm.
+ * \param alarm new alarm found in the alarm_list.
+ * \param thread_alarm_list local alarm list of periodic display thread.
+ * \return if new alarm is already in the local alarm list, return the point of that 
+ *         alarm. otherwise return NULL.
+ */
+alarm_t* get_existed_alarm(alarm_t* alarm, alarm_t* thread_alarm_list)
+{
+   alarm_t *tmp_alarm;
+   for(tmp_alarm = thread_alarm_list; tmp_alarm != NULL; tmp_alarm = tmp_alarm->link){
+      if(alarm->message_number == tmp_alarm->message_number){
+         return tmp_alarm;
+      }
+   }
+
+   return NULL;
+}
+
+/**
  * periodic display threads
  * \param arg message type
  */
@@ -428,17 +449,12 @@ void * periodic_display_threads(void * arg) {
 
    pthread_cleanup_push(thread_terminate_cleanup, (void * ) thread_alarm_list);
 
-   status = pthread_mutex_lock( & alarm_mutex);
+   /*status = pthread_mutex_lock( & alarm_mutex);
    if (status != 0)
-      err_abort(status, "Lock mutex");
+      err_abort(status, "Lock mutex");*/
 
    while (1) {
-      /*status = pthread_mutex_lock( & alarm_mutex);
-      if (status != 0)
-         err_abort(status, "Lock mutex");*/
-
-    
-      /* check if there is alarm whcih the message type has been changed */
+      /* check if there is alarm which the message type has been changed */
       alarm_t **p_alarm = &thread_alarm_list;
       while(*p_alarm && !message_type_changed(*p_alarm)){
          p_alarm = &(*p_alarm)->link;
@@ -450,13 +466,7 @@ void * periodic_display_threads(void * arg) {
          printf("Stopped Displaying Replaced Alarm With Message Type (%d) at %d:A\n", alarm_del->message_type, time(NULL));
          free(alarm_del);
       }
-      /*for(alarm = thread_alarm_list; alarm != NULL; last_alarm = alarm, alarm = alarm->link){
-         if(message_type_changed(alarm)){
-            last_alarm = alarm->link;
-            printf("Stopped Displaying Replaced Alarm With Message Type (%d) at %d:A\n", alarm->message_type, time(NULL));
-            free(alarm);
-         }
-      }*/
+
       READ_SEMAPHORE_START
       alarm = alarm_list;
 
@@ -468,11 +478,16 @@ void * periodic_display_threads(void * arg) {
       }
       READ_SEMAPHORE_END
       if(alarm != NULL){
-         alarm->status = pthread_self();
-         current_alarm = (alarm_t*)malloc(sizeof(alarm_t));
-         memcpy(current_alarm, alarm, sizeof(alarm_t));
-         current_alarm->link = NULL;
-         local_alarm_insert(current_alarm, &thread_alarm_list);  
+         alarm_t* existed_alarm = get_existed_alarm(alarm, thread_alarm_list);
+         if(existed_alarm != NULL){
+            strcpy(existed_alarm->message, alarm->message); 
+         }else{
+            alarm->status = pthread_self();
+            current_alarm = (alarm_t*)malloc(sizeof(alarm_t));
+            memcpy(current_alarm, alarm, sizeof(alarm_t));
+            current_alarm->link = NULL;
+            local_alarm_insert(current_alarm, &thread_alarm_list); 
+         }
       }
       if (thread_alarm_list == NULL) {
 #ifdef DEBUG          
@@ -497,7 +512,7 @@ void * periodic_display_threads(void * arg) {
          current_alarm->link = NULL;
 #ifdef DEBUG
    printf("[thread_alarm_list: ");
-   //alarm_t *tmp;
+
    for (tmp = thread_alarm_list; tmp != NULL; tmp = tmp->link)
       printf("%d(%d)[\"%s\"] ", tmp->message_type,
          tmp->message_number /* = time (NULL)*/ , tmp->message, tmp->time);
@@ -560,9 +575,9 @@ void * alarm_thread(void * arg) {
    display_thread_t * thread_node;
    thread_node = NULL;
 
-   status = pthread_mutex_lock( &alarm_mutex);
+   /*status = pthread_mutex_lock( &alarm_mutex);
    if (status != 0)
-      err_abort(status, "Lock mutex");
+      err_abort(status, "Lock mutex");*/
 #ifdef DEBUG
    pthread_cleanup_push(exit_alarm_thread, NULL);
 #endif
@@ -582,23 +597,18 @@ void * alarm_thread(void * arg) {
       READ_SEMAPHORE_END
       //If Request A
       if (next->alarm_request_type == 'A') {
-         status = pthread_cond_broadcast(&alarmA_req);
-         if(status != 0)
-            err_abort(status, "Broadcast cond");
          next->seen_by_alarm_thread = 1;
          display_thread_t * next_thread;
          for (next_thread = thread_list; next_thread != NULL; next_thread = next_thread->link) {
             if (!alarm_list_containsmt(next_thread->message_type, 'A')) {
-               status = pthread_mutex_unlock( & alarm_mutex);
-               if (status != 0)
-                  err_abort(status, "unlock mutex");
-
                alarm_remover(alarm_with_the_message_type(next_thread->message_type, 'B'));
                
                printf("Type A Alarm Request Processed at %d: Periodic Display Thread For Message Type (%d) Terminated: No more Alarm Requests For Message Type (%d). \n", time(NULL), next_thread->message_type, next_thread->message_type);
             }
          }
-
+         status = pthread_cond_broadcast(&alarmA_req);
+         if(status != 0)
+            err_abort(status, "Broadcast cond");
       }
       //If request B
       if (next->alarm_request_type == 'B') {
